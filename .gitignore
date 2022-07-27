@@ -53,3 +53,12 @@ dkms.conf
 
 # Custom
 .idea
+CMakeLists.txt
+custom_unistd.h
+makefile
+memmanager.c
+rdebug.*
+tested_declarations.h
+unit_helper_v2.*
+unit_test_v2.c
+cmake-build-debug
