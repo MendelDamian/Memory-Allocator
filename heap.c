@@ -6,7 +6,7 @@
 MEMORY_MANAGER memory_manager;
 
 #define PAGE_SIZE 4096
-#define FENCE 0xEA
+#define FENCE 0x23
 #define FENCES 16
 #define SBRK_FAIL ((void *)-1)
 
@@ -52,7 +52,7 @@ MEMORY_MANAGER memory_manager;
 void set_fences(MEMORY_CHUNK *memory_chunk)
 {
     memset((char *)memory_chunk + sizeof(MEMORY_CHUNK), FENCE, FENCES);
-    memset((char *)memory_chunk + sizeof(MEMORY_CHUNK) + FENCES + memory_chunk->size, FENCES, FENCES);
+    memset((char *)memory_chunk + sizeof(MEMORY_CHUNK) + FENCES + memory_chunk->size, FENCE, FENCES);
 }
 
 int heap_setup(void)
@@ -79,7 +79,6 @@ void* heap_malloc(size_t size)
     }
 
     MEMORY_CHUNK *memory_chunk = memory_manager.first_memory_chunk;
-    intptr_t aligned_size = ALIGN_PAGE(size);
 
     while (memory_chunk)
     {
@@ -117,10 +116,12 @@ void* heap_malloc(size_t size)
 
             set_fences(next);
             return MEMORY_CHUNK_TO_DATA_ADDRESS(next);
-
         }
+
+        memory_chunk = memory_chunk->next;
     }
 
+    intptr_t aligned_size = ALIGN_PAGE(size);
     memory_manager.memory_start = custom_sbrk(aligned_size);
     if (memory_manager.memory_start == SBRK_FAIL)
     {
