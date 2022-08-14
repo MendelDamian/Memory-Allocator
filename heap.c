@@ -43,6 +43,9 @@ MEMORY_MANAGER memory_manager;
 // Get size of occupied data block from MEMORY_CHUNK.
 #define MEMORY_DATA_OCCUPIED_SIZE(chunk) (MEMORY_CHUNK_OCCUPIED_SIZE(chunk) - sizeof(MEMORY_CHUNK) - FENCES - FENCES)
 
+// Get size of occupied data block from MEMORY_CHUNK.
+#define MEMORY_DATA_FULL_OCCUPIED_SIZE(chunk) (MEMORY_CHUNK_OCCUPIED_SIZE(chunk) - sizeof(MEMORY_CHUNK))
+
 // Get address of next MEMORY_CHUNK from passed MEMORY_CHUNK.
 #define MEMORY_CHUNK_NEXT(chunk) ((MEMORY_CHUNK *)((char *)(chunk) + MEMORY_CHUNK_OCCUPIED_SIZE(chunk)))
 
@@ -156,7 +159,57 @@ void* heap_realloc(void* address, size_t count)
 
 void heap_free(void* address)
 {
-    (void)address;
+    enum pointer_type_t ptr_type = get_pointer_type(address);
+    if (ptr_type != pointer_valid)
+    {
+        return;
+    }
+
+    // Set the memory chunk to be freed.
+    MEMORY_CHUNK *memory_chunk = MEMORY_CHUNK_FROM_DATA_ADDRESS(address);
+    memory_chunk->free = FREED;
+    memory_chunk->size = MEMORY_DATA_FULL_OCCUPIED_SIZE(memory_chunk);
+
+    MEMORY_CHUNK *prev = memory_chunk->prev;
+    MEMORY_CHUNK *next = memory_chunk->next;
+
+    // Merge previous freed chunk.
+    if (prev && prev->free == FREED)
+    {
+        prev->next = next;
+        if (next)
+        {
+            next->prev = prev;
+        }
+
+        memory_chunk = prev;
+    }
+
+    // Merge next freed chunk.
+    if (next && next->free == FREED)
+    {
+        memory_chunk->next = next->next;
+        if (next->next)
+        {
+            next->next->prev = memory_chunk;
+        }
+    }
+
+    if (memory_chunk->next == NULL)
+    {
+        if (memory_chunk->prev)
+        {
+            memory_chunk->prev->next = NULL;
+        }
+        else
+        {
+            // There is only one chunk and it's freed.
+            memory_manager.first_memory_chunk = NULL;
+        }
+        return;
+    }
+
+    memory_chunk->size = MEMORY_DATA_FULL_OCCUPIED_SIZE(memory_chunk);
 }
 
 size_t heap_get_largest_used_block_size(void)
