@@ -29,7 +29,7 @@ MEMORY_MANAGER memory_manager;
 
 #define MEMORY_CHUNK_FROM_DATA_ADDRESS(address) ((MEMORY_CHUNK *)((char *)(address) - FENCES - sizeof(MEMORY_CHUNK)))
 
-int heap_setup()
+int heap_setup(void)
 {
     memory_manager.first_memory_chunk = NULL;
     memory_manager.memory_size = 0;
@@ -37,9 +37,12 @@ int heap_setup()
     return 0;
 }
 
-void heap_clean()
+void heap_clean(void)
 {
-
+    custom_sbrk(-(intptr_t)memory_manager.memory_size);
+    memory_manager.first_memory_chunk = NULL;
+    memory_manager.memory_start = NULL;
+    memory_manager.memory_size = 0;
 }
 
 void* heap_malloc(size_t size)
@@ -86,6 +89,9 @@ void* heap_malloc(size_t size)
     memory_chunk->free = USED;
     memory_chunk->prev = NULL;
     memory_chunk->next = NULL;
+
+    memory_manager.memory_size = ALIGN_PAGE(size);
+    memory_manager.first_memory_chunk = memory_chunk;
     // TODO: fences
     return MEMORY_CHUNK_DATA_ADDRESS(memory_chunk);
 }
@@ -107,18 +113,29 @@ void heap_free(void* address)
     (void)address;
 }
 
-size_t heap_get_largest_used_block_size()
+size_t heap_get_largest_used_block_size(void)
 {
-    return 0;
+    size_t largest_used_block = 0;
+    MEMORY_CHUNK *memory_chunk = memory_manager.first_memory_chunk;
+    while (memory_chunk)
+    {
+        if (memory_chunk->free == USED && memory_chunk->size > largest_used_block)
+        {
+            largest_used_block = memory_chunk->size;
+        }
+        memory_chunk = memory_chunk->next;
+    }
+
+    return largest_used_block;
 }
 
 enum pointer_type_t get_pointer_type(const void* ptr)
 {
     (void)ptr;
-    return pointer_null;
+    return pointer_valid;
 }
 
-int heap_validate()
+int heap_validate(void)
 {
     return 0;
 }

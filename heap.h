@@ -35,18 +35,18 @@ typedef struct memory_chunk_t
     int free;
 } MEMORY_CHUNK;
 
-int heap_setup();
-void heap_clean();
+int heap_setup(void);
+void heap_clean(void);
 
 void* heap_malloc(size_t size);
 void* heap_calloc(size_t number, size_t size);
 void* heap_realloc(void* address, size_t count);
 void heap_free(void* address);
 
-size_t heap_get_largest_used_block_size();
+size_t heap_get_largest_used_block_size(void);
 enum pointer_type_t get_pointer_type(const void* ptr);
 
-int heap_validate();
+int heap_validate(void);
 
 void* heap_malloc_aligned(size_t size);
 void* heap_calloc_aligned(size_t number, size_t size);
