@@ -8,6 +8,7 @@ MEMORY_MANAGER memory_manager;
 #define PAGE_SIZE 4096
 #define FENCE 0x23  // '#'
 #define FENCES 16
+#define MAGIC 0xdeadbeef
 #define SBRK_FAIL ((void *)-1)
 #define CHUNK_SPACE (sizeof(MEMORY_CHUNK) + 2 * FENCES)
 
@@ -18,15 +19,15 @@ MEMORY_MANAGER memory_manager;
 #define ALIGN_PAGE(n) (((n) + (PAGE_SIZE - 1)) & (-PAGE_SIZE))
 
 // Get pointer_valid using MEMORY_CHUNK.
-void* heap_chunk_to_data_address(MEMORY_CHUNK* chunk)
+void* heap_chunk_to_data_address(MEMORY_CHUNK *chunk)
 {
     return (char *)chunk + sizeof(MEMORY_CHUNK) + FENCES;
 }
 
 // Get MEMORY_CHUNK using pointer_valid.
-MEMORY_CHUNK* heap_chunk_from_data_address(void* addr)
+MEMORY_CHUNK* heap_chunk_from_data_address(void *addr)
 {
-    MEMORY_CHUNK* chunk = (MEMORY_CHUNK *) ((char *) addr - sizeof(MEMORY_CHUNK) - FENCES);
+    MEMORY_CHUNK *chunk = (MEMORY_CHUNK *) ((char *) addr - sizeof(MEMORY_CHUNK) - FENCES);
     return chunk;
 }
 
@@ -48,21 +49,21 @@ size_t heap_chunk_occupied_size(MEMORY_CHUNK* chunk)
 }
 
 // Get offset between memory_start and passed ptr.
-intptr_t heap_offset(void* addr)
+intptr_t heap_offset(void *addr)
 {
     intptr_t offset = (char *)addr - (char *)memory_manager.memory_start;
     return offset;
 }
 
 // Get offset between memory_start and full chunk (aligned size + CHUNK_SPACE).
-intptr_t heap_chunk_offset(MEMORY_CHUNK* chunk)
+intptr_t heap_chunk_offset(MEMORY_CHUNK *chunk)
 {
-    void* addr = (char *)chunk + heap_chunk_occupied_size(chunk);
+    void *addr = (char *)chunk + heap_chunk_occupied_size(chunk);
     return heap_offset(addr);
 }
 
 // Get remaining space in memory using last MEMORY_CHUNK.
-size_t heap_remaining_space(MEMORY_CHUNK* last_chunk)
+size_t heap_remaining_space(MEMORY_CHUNK *last_chunk)
 {
     return memory_manager.memory_size - heap_chunk_offset(last_chunk);
 }
@@ -74,10 +75,10 @@ size_t heap_calc_size(size_t size)
 }
 
 // Get address of next MEMORY_CHUNK.
-MEMORY_CHUNK* heap_get_next_chunk(MEMORY_CHUNK* chunk)
+MEMORY_CHUNK* heap_get_next_chunk(MEMORY_CHUNK *chunk)
 {
     size_t occupied_size = heap_chunk_occupied_size(chunk);
-    MEMORY_CHUNK* next_chunk = (MEMORY_CHUNK *)((char *)chunk + occupied_size);
+    MEMORY_CHUNK *next_chunk = (MEMORY_CHUNK *)((char *)chunk + occupied_size);
     return next_chunk;
 }
 
@@ -89,9 +90,15 @@ void heap_set_fences(MEMORY_CHUNK *memory_chunk)
 
 int heap_setup(void)
 {
+    void *memory_start = custom_sbrk(PAGE_SIZE);
+    if (memory_start == SBRK_FAIL)
+    {
+        return -1;
+    }
+
     memory_manager.first_memory_chunk = NULL;
-    memory_manager.memory_size = 0;
-    memory_manager.memory_start = NULL;
+    memory_manager.memory_size = PAGE_SIZE;
+    memory_manager.memory_start = memory_start;
     return 0;
 }
 
@@ -118,6 +125,7 @@ void* heap_malloc(size_t size)
         {
             memory_chunk->size = size;
             memory_chunk->free = USED;
+            memory_chunk->magic = MAGIC;
             heap_set_fences(memory_chunk);
             return heap_chunk_to_data_address(memory_chunk);
         }
@@ -145,7 +153,7 @@ void* heap_malloc(size_t size)
             next->next = NULL;
             next->size = size;
             next->free = USED;
-
+            next->magic = MAGIC;
             heap_set_fences(next);
             return heap_chunk_to_data_address(next);
         }
@@ -153,11 +161,17 @@ void* heap_malloc(size_t size)
         memory_chunk = memory_chunk->next;
     }
 
-    intptr_t aligned_size = ALIGN_PAGE(size);
-    memory_manager.memory_start = custom_sbrk(aligned_size);
-    if (memory_manager.memory_start == SBRK_FAIL)
+    size_t needed_space = heap_calc_size(size);
+    if (needed_space > memory_manager.memory_size)
     {
-        return NULL;
+        intptr_t to_allocate = ALIGN_PAGE(needed_space - memory_manager.memory_size);
+        void *result = custom_sbrk(to_allocate);
+        if (result == SBRK_FAIL)
+        {
+            return NULL;
+        }
+
+        memory_manager.memory_size += (size_t)to_allocate;
     }
 
     memory_chunk = (MEMORY_CHUNK *)memory_manager.memory_start;
@@ -165,10 +179,8 @@ void* heap_malloc(size_t size)
     memory_chunk->free = USED;
     memory_chunk->prev = NULL;
     memory_chunk->next = NULL;
-
-    memory_manager.memory_size = aligned_size;
     memory_manager.first_memory_chunk = memory_chunk;
-
+    memory_chunk->magic = MAGIC;
     heap_set_fences(memory_chunk);
     return heap_chunk_to_data_address(memory_chunk);
 }
@@ -184,13 +196,13 @@ void* heap_calloc(size_t number, size_t size)
     return result;
 }
 
-void* heap_realloc(void* address, size_t count)
+void* heap_realloc(void *address, size_t count)
 {
     (void)address;(void)count;
     return NULL;
 }
 
-void heap_free(void* address)
+void heap_free(void *address)
 {
     enum pointer_type_t ptr_type = get_pointer_type(address);
     if (ptr_type != pointer_valid)
@@ -247,6 +259,11 @@ void heap_free(void* address)
 
 size_t heap_get_largest_used_block_size(void)
 {
+    if (heap_validate())
+    {
+        return 0;
+    }
+
     size_t largest_used_block = 0;
     MEMORY_CHUNK *memory_chunk = memory_manager.first_memory_chunk;
     while (memory_chunk)
@@ -261,8 +278,9 @@ size_t heap_get_largest_used_block_size(void)
     return largest_used_block;
 }
 
-enum pointer_type_t get_pointer_type(const void* ptr)
+enum pointer_type_t get_pointer_type(const void *ptr)
 {
+    // todo: check if ptr is between two chunks.
     if (ptr == NULL)
     {
         return pointer_null;
@@ -320,6 +338,63 @@ enum pointer_type_t get_pointer_type(const void* ptr)
 
 int heap_validate(void)
 {
+    if (memory_manager.memory_start == NULL || memory_manager.memory_size == 0)
+    {
+        return 2;
+    }
+
+    MEMORY_CHUNK *memory_chunk = memory_manager.first_memory_chunk;
+    while (memory_chunk)
+    {
+        // Check if the control block is corrupted.
+        if (memory_chunk < memory_manager.first_memory_chunk
+            || (char *)memory_chunk > (char *)memory_manager.first_memory_chunk + memory_manager.memory_size)
+        {
+            return 3;
+        }
+
+        if (memory_chunk->free != USED && memory_chunk->free != FREED)
+        {
+            return 3;
+        }
+
+        if (memory_chunk->size == 0 || memory_chunk->size > memory_manager.memory_size)
+        {
+            return 3;
+        }
+
+        if (memory_chunk->magic != MAGIC)
+        {
+            return 3;
+        }
+
+        if (memory_chunk->prev && memory_chunk->prev->next != memory_chunk)
+        {
+            return 3;
+        }
+
+        if (memory_chunk->next && memory_chunk->next->prev != memory_chunk)
+        {
+            return 3;
+        }
+
+        if (memory_chunk->free == USED)
+        {
+            // Check if fences are corrupted.
+            for (int i = 0; i < FENCES; ++i)
+            {
+                char *first_fence = (char *)memory_chunk + sizeof(MEMORY_CHUNK);
+                char *second_fence = (char *)first_fence + FENCES + memory_chunk->size;
+
+                if (*(first_fence + i) != FENCE || *(second_fence + i) != FENCE)
+                {
+                    return 1;
+                }
+            }
+        }
+
+        memory_chunk = memory_chunk->next;
+    }
     return 0;
 }
 
@@ -335,7 +410,7 @@ void* heap_calloc_aligned(size_t number, size_t size)
     return NULL;
 }
 
-void* heap_realloc_aligned(void* address, size_t size)
+void* heap_realloc_aligned(void *address, size_t size)
 {
     (void)address;(void)size;
     return NULL;

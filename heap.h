@@ -29,10 +29,11 @@ typedef struct memory_manager_t
 
 typedef struct memory_chunk_t
 {
-    struct memory_chunk_t* prev;
-    struct memory_chunk_t* next;
+    struct memory_chunk_t *prev;
+    struct memory_chunk_t *next;
     size_t size;
     int free;
+    unsigned int magic;
 } MEMORY_CHUNK;
 
 int heap_setup(void);
@@ -40,8 +41,8 @@ void heap_clean(void);
 
 void* heap_malloc(size_t size);
 void* heap_calloc(size_t number, size_t size);
-void* heap_realloc(void* address, size_t count);
-void heap_free(void* address);
+void* heap_realloc(void *address, size_t count);
+void heap_free(void *address);
 
 size_t heap_get_largest_used_block_size(void);
 enum pointer_type_t get_pointer_type(const void* ptr);
@@ -50,7 +51,7 @@ int heap_validate(void);
 
 void* heap_malloc_aligned(size_t size);
 void* heap_calloc_aligned(size_t number, size_t size);
-void* heap_realloc_aligned(void* address, size_t size);
+void* heap_realloc_aligned(void *address, size_t size);
 
 #ifndef CUSTOM_SBRK
 #define CUSTOM_SBRK
