@@ -6,9 +6,10 @@
 MEMORY_MANAGER memory_manager;
 
 #define PAGE_SIZE 4096
-#define FENCE 0x23
+#define FENCE 0x23  // '#'
 #define FENCES 16
 #define SBRK_FAIL ((void *)-1)
+#define CHUNK_SPACE (sizeof(MEMORY_CHUNK) + 2 * FENCES)
 
 // Round number to 8.
 #define ALIGN(n) (((n) + 7) & (-8))
@@ -17,39 +18,74 @@ MEMORY_MANAGER memory_manager;
 #define ALIGN_PAGE(n) (((n) + (PAGE_SIZE - 1)) & (-PAGE_SIZE))
 
 // Get pointer_valid using MEMORY_CHUNK.
-#define MEMORY_CHUNK_TO_DATA_ADDRESS(chunk) ((void *)((char *)(chunk) + sizeof(MEMORY_CHUNK) + FENCES))
+void* heap_chunk_to_data_address(MEMORY_CHUNK* chunk)
+{
+    void* addr = (char *)chunk + sizeof(MEMORY_CHUNK) + FENCES;
+    return addr;
+}
 
 // Get MEMORY_CHUNK using pointer_valid.
-#define MEMORY_CHUNK_FROM_DATA_ADDRESS(ptr) ((MEMORY_CHUNK *)((char *)(ptr) - sizeof(MEMORY_CHUNK) - FENCES))
+MEMORY_CHUNK* heap_chunk_from_data_address(void* addr)
+{
+    MEMORY_CHUNK* chunk = (MEMORY_CHUNK *) ((char *) addr - sizeof(MEMORY_CHUNK) - FENCES);
+    return chunk;
+}
 
-// Get distance between memory_start and passed ptr.
-#define MEMORY_OFFSET(ptr) ((intptr_t)((char *)(ptr) - (char *)memory_manager.memory_start))
+// Get occupied size of MEMORY_CHUNK.
+size_t cheap_chunk_occupied_size(MEMORY_CHUNK* chunk)
+{
+    size_t occupied_size;
+    if (chunk->next)
+    {
+        occupied_size = chunk->next - chunk;
+    }
+    else
+    {
+        occupied_size = CHUNK_SPACE + chunk->size;
+    }
 
-// Get distance between chunk with occupied data space and memory_start
-#define MEMORY_CHUNK_FULL_OFFSET(chunk) MEMORY_OFFSET((char *)(chunk) + MEMORY_DATA_OCCUPIED_SIZE(chunk))
+    occupied_size = ALIGN(occupied_size);
+    return occupied_size;
+}
 
-// Get remaining space in memory by passing last MEMORY_CHUNK.
-#define MEMORY_REMAINING_SPACE(last_chunk) (memory_manager.memory_size - MEMORY_CHUNK_FULL_OFFSET(last_chunk))
+// Get offset between memory_start and passed ptr.
+intptr_t heap_offset(void* addr)
+{
+    intptr_t offset = (char *)addr - (char *)memory_manager.memory_start;
+    return offset;
+}
 
-// Get needed space for MEMORY_CHUNK with specified size.
-#define MEMORY_CHUNK_SPACE(size) (sizeof(MEMORY_CHUNK) + FENCES + (size) + FENCES)
+// Get offset between memory_start and full chunk (aligned size + CHUNK_SPACE).
+intptr_t heap_chunk_offset(MEMORY_CHUNK* chunk)
+{
+    void* addr = (char *)chunk + cheap_chunk_occupied_size(chunk);
+    addr = (void *)ALIGN((size_t)addr);  // todo: may be unnecessary.
+    return heap_offset(addr);
+}
 
-// Get occupied size of MEMORY_CHUNK (control block + fences + FULL data block + fences) from MEMORY_CHUNK.
-#define MEMORY_CHUNK_OCCUPIED_SIZE(chunk) \
-    ((chunk)->next \
-    ? (size_t)((char *)((chunk)->next) - (char *)(chunk)) \
-    : (size_t)MEMORY_CHUNK_SPACE((chunk)->size))
+// Get remaining space in memory using last MEMORY_CHUNK.
+size_t heap_remaining_space(MEMORY_CHUNK* last_chunk)
+{
+    return memory_manager.memory_size - heap_chunk_offset(last_chunk);
+}
 
-// Get size of occupied data block from MEMORY_CHUNK.
-#define MEMORY_DATA_OCCUPIED_SIZE(chunk) (MEMORY_CHUNK_OCCUPIED_SIZE(chunk) - sizeof(MEMORY_CHUNK) - FENCES - FENCES)
+// Calculate size of chunk based on size.
+size_t heap_chunk_size(size_t size)
+{
+    size_t chunk_size = CHUNK_SPACE + size;
+    chunk_size = ALIGN(chunk_size);
+    return chunk_size;
+}
 
-// Get size of occupied data block from MEMORY_CHUNK.
-#define MEMORY_DATA_FULL_OCCUPIED_SIZE(chunk) (MEMORY_CHUNK_OCCUPIED_SIZE(chunk) - sizeof(MEMORY_CHUNK))
+// Get address of next MEMORY_CHUNK.
+MEMORY_CHUNK* heap_get_next_chunk(MEMORY_CHUNK* chunk)
+{
+    size_t occupied_size = cheap_chunk_occupied_size(chunk);
+    MEMORY_CHUNK* next_chunk = (MEMORY_CHUNK *)((char *)chunk + occupied_size);
+    return next_chunk;
+}
 
-// Get address of next MEMORY_CHUNK from passed MEMORY_CHUNK.
-#define MEMORY_CHUNK_NEXT(chunk) ((MEMORY_CHUNK *)((char *)(chunk) + MEMORY_CHUNK_OCCUPIED_SIZE(chunk)))
-
-void set_fences(MEMORY_CHUNK *memory_chunk)
+void heap_set_fences(MEMORY_CHUNK *memory_chunk)
 {
     memset((char *)memory_chunk + sizeof(MEMORY_CHUNK), FENCE, FENCES);
     memset((char *)memory_chunk + sizeof(MEMORY_CHUNK) + FENCES + memory_chunk->size, FENCE, FENCES);
@@ -86,7 +122,7 @@ void* heap_malloc(size_t size)
         {
             memory_chunk->size = size;
             memory_chunk->free = USED;
-            set_fences(memory_chunk);
+            heap_set_fences(memory_chunk);
             return MEMORY_CHUNK_TO_DATA_ADDRESS(memory_chunk);
         }
 
@@ -107,14 +143,14 @@ void* heap_malloc(size_t size)
                 memory_manager.memory_size += (size_t)to_allocate;
             }
 
-            MEMORY_CHUNK *next = MEMORY_CHUNK_NEXT(memory_chunk);
+            MEMORY_CHUNK *next = heap_get_next_chunk(memory_chunk);
             memory_chunk->next = next;
             next->prev = memory_chunk;
             next->next = NULL;
             next->size = size;
             next->free = USED;
 
-            set_fences(next);
+            heap_set_fences(next);
             return MEMORY_CHUNK_TO_DATA_ADDRESS(next);
         }
 
@@ -137,7 +173,7 @@ void* heap_malloc(size_t size)
     memory_manager.memory_size = aligned_size;
     memory_manager.first_memory_chunk = memory_chunk;
 
-    set_fences(memory_chunk);
+    heap_set_fences(memory_chunk);
     return MEMORY_CHUNK_TO_DATA_ADDRESS(memory_chunk);
 }
 
@@ -169,7 +205,7 @@ void heap_free(void* address)
     // Set the memory chunk to be freed.
     MEMORY_CHUNK *memory_chunk = MEMORY_CHUNK_FROM_DATA_ADDRESS(address);
     memory_chunk->free = FREED;
-    memory_chunk->size = MEMORY_DATA_FULL_OCCUPIED_SIZE(memory_chunk);
+    memory_chunk->size = heap_data_full_occupied_size(memory_chunk);
 
     MEMORY_CHUNK *prev = memory_chunk->prev;
     MEMORY_CHUNK *next = memory_chunk->next;
@@ -210,7 +246,7 @@ void heap_free(void* address)
         return;
     }
 
-    memory_chunk->size = MEMORY_DATA_FULL_OCCUPIED_SIZE(memory_chunk);
+    memory_chunk->size = heap_data_full_occupied_size(memory_chunk);
 }
 
 size_t heap_get_largest_used_block_size(void)
