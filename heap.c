@@ -267,9 +267,25 @@ void* heap_realloc(void *address, size_t count)
         occupied_size -= sizeof(MEMORY_CHUNK);
     }
     size_t needed_space = heap_calc_size(count);
+    size_t remaining_space = heap_remaining_space(chunk_to_reallocate);
 
     if (needed_space <= occupied_size)
     {
+        chunk_to_reallocate->size = count;
+        heap_set_fences(chunk_to_reallocate);
+        return address;
+    }
+
+    if (chunk_to_reallocate->next == NULL && needed_space > remaining_space)
+    {
+        intptr_t to_allocate = ALIGN_PAGE(needed_space - remaining_space);
+        void *result = custom_sbrk(to_allocate);
+        if (result == SBRK_FAIL)
+        {
+            return NULL;
+        }
+
+        memory_manager.memory_size += (size_t)to_allocate;
         chunk_to_reallocate->size = count;
         heap_set_fences(chunk_to_reallocate);
         return address;
@@ -319,25 +335,14 @@ void* heap_realloc(void *address, size_t count)
         }
         else
         {
-            size_t remaining_space = heap_remaining_space(memory_chunk);
-            remaining_space += heap_chunk_size(memory_chunk) - sizeof(MEMORY_CHUNK);
-
-            if (needed_space > remaining_space)
+            void *ptr = heap_malloc(count);
+            if (ptr)
             {
-                intptr_t to_allocate = ALIGN_PAGE(needed_space - remaining_space);
-                void *result = custom_sbrk(to_allocate);
-                if (result == SBRK_FAIL)
-                {
-                    return NULL;
-                }
-
-                memory_manager.memory_size += (size_t)to_allocate;
+                void *data = heap_chunk_to_data_address(chunk_to_reallocate);
+                memcpy(ptr, data, chunk_to_reallocate->size);
+                heap_free(address);
+                return ptr;
             }
-
-            memory_chunk->size = count;
-            memory_chunk->free = USED;
-            heap_set_fences(memory_chunk);
-            return address;
         }
 
         memory_chunk = memory_chunk->next;
@@ -348,8 +353,7 @@ void* heap_realloc(void *address, size_t count)
 
 void heap_free(void *address)
 {
-    enum pointer_type_t ptr_type = get_pointer_type(address);
-    if (ptr_type != pointer_valid)
+    if (get_pointer_type(address) != pointer_valid)
     {
         return;
     }
