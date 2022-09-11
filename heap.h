@@ -53,6 +53,9 @@ void* heap_malloc_aligned(size_t size);
 void* heap_calloc_aligned(size_t number, size_t size);
 void* heap_realloc_aligned(void *address, size_t size);
 
+void heap_print_chunks(void);
+void heap_print(void);
+
 #ifndef CUSTOM_SBRK
 #define CUSTOM_SBRK
 extern void* custom_sbrk(intptr_t delta);

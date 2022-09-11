@@ -1,5 +1,6 @@
 #include "heap.h"
 #include <string.h>
+#include <stdio.h>
 #include "tested_declarations.h"
 #include "rdebug.h"
 
@@ -198,7 +199,83 @@ void* heap_calloc(size_t number, size_t size)
 
 void* heap_realloc(void *address, size_t count)
 {
-    (void)address;(void)count;
+    if (heap_validate())
+    {
+        return NULL;
+    }
+
+    if (address == NULL)
+    {
+        return heap_malloc(count);
+    }
+
+    if (get_pointer_type(address) != pointer_valid)
+    {
+        return NULL;
+    }
+
+    if (count == 0)
+    {
+        heap_free(address);
+        return NULL;
+    }
+
+    MEMORY_CHUNK *chunk_to_reallocate = heap_chunk_from_data_address(address);
+    if (chunk_to_reallocate->size == count)
+    {
+        return address;
+    }
+
+    if (chunk_to_reallocate->size > count)
+    {
+        chunk_to_reallocate->size = count;
+        heap_set_fences(chunk_to_reallocate);
+        return address;
+    }
+
+    MEMORY_CHUNK *memory_chunk = chunk_to_reallocate;
+    while (memory_chunk)
+    {
+        if (memory_chunk->free == FREED && memory_chunk->size >= (count + FENCES * 2))
+        {
+            memory_chunk->size = count;
+            memory_chunk->free = USED;
+            heap_set_fences(memory_chunk);
+
+            void *data = heap_chunk_to_data_address(memory_chunk);
+            memcpy(data, heap_chunk_to_data_address(chunk_to_reallocate), chunk_to_reallocate->size);
+            heap_free(chunk_to_reallocate);
+
+            return data;
+        }
+
+        if (memory_chunk->next == NULL)
+        {
+            size_t remaining_space = heap_remaining_space(memory_chunk);
+            remaining_space += heap_chunk_occupied_size(memory_chunk) - sizeof(MEMORY_CHUNK);
+            size_t needed_space = heap_calc_size(count);
+
+            if (needed_space > remaining_space)
+            {
+                intptr_t to_allocate = ALIGN_PAGE(needed_space - remaining_space);
+                void *result = custom_sbrk(to_allocate);
+                if (result == SBRK_FAIL)
+                {
+                    return NULL;
+                }
+
+                memory_manager.memory_size += (size_t)to_allocate;
+            }
+
+            memory_chunk->size = count;
+            memory_chunk->free = USED;
+            heap_set_fences(memory_chunk);
+            return address;
+        }
+
+        memory_chunk = memory_chunk->next;
+    }
+
     return NULL;
 }
 
@@ -280,7 +357,6 @@ size_t heap_get_largest_used_block_size(void)
 
 enum pointer_type_t get_pointer_type(const void *ptr)
 {
-    // todo: check if ptr is between two chunks.
     if (ptr == NULL)
     {
         return pointer_null;
@@ -358,6 +434,7 @@ int heap_validate(void)
             return 3;
         }
 
+        // todo: do some magic do check if size was changed.
         if (memory_chunk->size == 0 || memory_chunk->size > memory_manager.memory_size)
         {
             return 3;
@@ -414,4 +491,69 @@ void* heap_realloc_aligned(void *address, size_t size)
 {
     (void)address;(void)size;
     return NULL;
+}
+
+void heap_print_chunks(void)
+{
+    if (heap_validate())
+    {
+        puts("Heap corrupted");
+        return;
+    }
+
+    MEMORY_CHUNK *memory_chunk = memory_manager.first_memory_chunk;
+    int i = 0;
+    while (memory_chunk)
+    {
+        printf("\nChunk %d\n", i);
+        printf("\tAddress: %p\n", (void *)memory_chunk);
+        printf("\tSize: %zu\n", memory_chunk->size);
+        printf("\tFree: %s\n", memory_chunk->free == USED ? "USED" : "FREED");
+        printf("\tPrev: %p\n", (void *)memory_chunk->prev);
+        printf("\tNext: %p\n", (void *)memory_chunk->next);
+        printf("\tMagic: %x\n", memory_chunk->magic);
+
+        i++;
+        memory_chunk = memory_chunk->next;
+    }
+}
+
+void heap_print(void)
+{
+    if (heap_validate())
+    {
+        puts("Heap corrupted");
+        return;
+    }
+
+    putchar('[');
+    void* adr = memory_manager.memory_start;
+    while ((char *)adr < (char *)memory_manager.memory_start + memory_manager.memory_size)
+    {
+        enum pointer_type_t pointer_type = get_pointer_type(adr);
+
+        switch (pointer_type)
+        {
+            case pointer_control_block:
+                putchar('C');
+                break;
+            case pointer_inside_fences:
+                putchar(FENCE);
+                break;
+            case pointer_valid:
+            case pointer_inside_data_block:
+                putchar('b');
+                break;
+            case pointer_unallocated:
+                putchar('.');
+                break;
+            default:
+                putchar(']');
+                return;
+        }
+
+        adr = (char *)adr + 1;
+    }
+
+    putchar(']');
 }
