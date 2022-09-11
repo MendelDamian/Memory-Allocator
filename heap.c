@@ -33,10 +33,10 @@ MEMORY_CHUNK* heap_chunk_from_data_address(void *addr)
 }
 
 // Get occupied size of MEMORY_CHUNK.
-size_t heap_chunk_occupied_size(MEMORY_CHUNK* chunk)
+size_t heap_chunk_size(MEMORY_CHUNK* chunk)
 {
     size_t occupied_size;
-    if (chunk->next)
+    if (chunk->free == FREED && chunk->next)
     {
         occupied_size = (char *)chunk->next - (char *)chunk;
     }
@@ -59,7 +59,7 @@ intptr_t heap_offset(void *addr)
 // Get offset between memory_start and full chunk (aligned size + CHUNK_SPACE).
 intptr_t heap_chunk_offset(MEMORY_CHUNK *chunk)
 {
-    void *addr = (char *)chunk + heap_chunk_occupied_size(chunk);
+    void *addr = (char *)chunk + heap_chunk_size(chunk);
     return heap_offset(addr);
 }
 
@@ -78,7 +78,7 @@ size_t heap_calc_size(size_t size)
 // Get address of next MEMORY_CHUNK.
 MEMORY_CHUNK* heap_get_next_chunk(MEMORY_CHUNK *chunk)
 {
-    size_t occupied_size = heap_chunk_occupied_size(chunk);
+    size_t occupied_size = heap_chunk_size(chunk);
     MEMORY_CHUNK *next_chunk = (MEMORY_CHUNK *)((char *)chunk + occupied_size);
     return next_chunk;
 }
@@ -131,7 +131,29 @@ void* heap_malloc(size_t size)
             return heap_chunk_to_data_address(memory_chunk);
         }
 
-        if (memory_chunk->next == NULL)
+        if (memory_chunk->next)
+        {
+            size_t occupied_size = (char *)memory_chunk->next - (char *)memory_chunk;
+            occupied_size -= heap_chunk_size(memory_chunk);  // Free space between chunks.
+            size_t needed_space = heap_calc_size(size);
+
+            if (occupied_size >= needed_space)
+            {
+                MEMORY_CHUNK *new_chunk = heap_get_next_chunk(memory_chunk);
+                new_chunk->size = size;
+                new_chunk->free = USED;
+                new_chunk->magic = MAGIC;
+
+                new_chunk->next = memory_chunk->next;
+                new_chunk->prev = memory_chunk;
+                memory_chunk->next = new_chunk;
+                new_chunk->next->prev = new_chunk;
+
+                heap_set_fences(new_chunk);
+                return heap_chunk_to_data_address(new_chunk);
+            }
+        }
+        else
         {
             size_t remaining_space = heap_remaining_space(memory_chunk);
             size_t needed_space = heap_calc_size(size);
@@ -233,9 +255,30 @@ void* heap_realloc(void *address, size_t count)
         return address;
     }
 
+    // Check if this chunk can be expanded.
+    size_t occupied_size;
+    if (chunk_to_reallocate->next)
+    {
+        occupied_size = (char *)chunk_to_reallocate->next - (char *)chunk_to_reallocate;
+    }
+    else
+    {
+        occupied_size = heap_chunk_size(chunk_to_reallocate);
+        occupied_size -= sizeof(MEMORY_CHUNK);
+    }
+    size_t needed_space = heap_calc_size(count);
+
+    if (needed_space <= occupied_size)
+    {
+        chunk_to_reallocate->size = count;
+        heap_set_fences(chunk_to_reallocate);
+        return address;
+    }
+
     MEMORY_CHUNK *memory_chunk = chunk_to_reallocate;
     while (memory_chunk)
     {
+        // Handle freed chunk.
         if (memory_chunk->free == FREED && memory_chunk->size >= (count + FENCES * 2))
         {
             memory_chunk->size = count;
@@ -249,11 +292,35 @@ void* heap_realloc(void *address, size_t count)
             return data;
         }
 
-        if (memory_chunk->next == NULL)
+        if (memory_chunk->next)
+        {
+            occupied_size = (char *)memory_chunk->next - (char *)memory_chunk;
+            occupied_size -= heap_chunk_size(memory_chunk);  // Free space between chunks.
+
+            if (occupied_size >= needed_space)
+            {
+                MEMORY_CHUNK *new_chunk = heap_get_next_chunk(memory_chunk);
+                new_chunk->size = count;
+                new_chunk->free = USED;
+                new_chunk->magic = MAGIC;
+
+                new_chunk->next = memory_chunk->next;
+                new_chunk->prev = memory_chunk;
+                memory_chunk->next = new_chunk;
+                new_chunk->next->prev = new_chunk;
+
+                heap_set_fences(new_chunk);
+                memcpy(heap_chunk_to_data_address(new_chunk),
+                       heap_chunk_to_data_address(chunk_to_reallocate),
+                       chunk_to_reallocate->size);
+                heap_free(chunk_to_reallocate);
+                return heap_chunk_to_data_address(new_chunk);
+            }
+        }
+        else
         {
             size_t remaining_space = heap_remaining_space(memory_chunk);
-            remaining_space += heap_chunk_occupied_size(memory_chunk) - sizeof(MEMORY_CHUNK);
-            size_t needed_space = heap_calc_size(count);
+            remaining_space += heap_chunk_size(memory_chunk) - sizeof(MEMORY_CHUNK);
 
             if (needed_space > remaining_space)
             {
@@ -289,8 +356,16 @@ void heap_free(void *address)
 
     // Set the memory chunk to be freed.
     MEMORY_CHUNK *memory_chunk = heap_chunk_from_data_address(address);
+    if (memory_chunk->next && memory_chunk->next->free == USED
+        && memory_chunk->prev && memory_chunk->prev->free == USED)
+    {
+        memory_chunk->prev->next = memory_chunk->next;
+        memory_chunk->next->prev = memory_chunk->prev;
+        return;
+    }
+
     memory_chunk->free = FREED;
-    memory_chunk->size = heap_chunk_occupied_size(memory_chunk) - sizeof(MEMORY_CHUNK);  // Without control block.
+    memory_chunk->size = heap_chunk_size(memory_chunk) - sizeof(MEMORY_CHUNK);  // Without control block.
 
     MEMORY_CHUNK *prev = memory_chunk->prev;
     MEMORY_CHUNK *next = memory_chunk->next;
@@ -305,6 +380,11 @@ void heap_free(void *address)
         }
 
         memory_chunk = prev;
+    }
+
+    if (prev && prev->free == USED)
+    {
+
     }
 
     // Merge next freed chunk.
@@ -331,7 +411,7 @@ void heap_free(void *address)
         return;
     }
 
-    memory_chunk->size = heap_chunk_occupied_size(memory_chunk) - sizeof(MEMORY_CHUNK);  // Without control block.
+    memory_chunk->size = heap_chunk_size(memory_chunk) - sizeof(MEMORY_CHUNK);  // Without control block.
 }
 
 size_t heap_get_largest_used_block_size(void)
@@ -527,6 +607,7 @@ void heap_print(void)
     }
 
     putchar('[');
+    int counter = 0;
     void* adr = memory_manager.memory_start;
     while ((char *)adr < (char *)memory_manager.memory_start + memory_manager.memory_size)
     {
@@ -553,7 +634,17 @@ void heap_print(void)
         }
 
         adr = (char *)adr + 1;
+        if (counter == 127)
+        {
+            counter = 0;
+            putchar('\n');
+            putchar(' ');
+        }
+        else
+        {
+            counter++;
+        }
     }
 
-    putchar(']');
+    puts("\r]\n");
 }
