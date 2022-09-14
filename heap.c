@@ -286,25 +286,6 @@ void* heap_realloc(void *address, size_t count)
         return address;
     }
 
-//    // Loop through freed chunks.
-//    MEMORY_CHUNK *memory_chunk = chunk_to_reallocate;
-//    while (memory_chunk)
-//    {
-//        if (memory_chunk->free == FREED && heap_chunk_size(memory_chunk) >= needed_space)
-//        {
-//            memory_chunk->size = count;
-//            memory_chunk->free = USED;
-//
-//            void *data_address = heap_chunk_to_data_address(memory_chunk);
-//            memcpy(data_address, address, chunk_to_reallocate->size);
-//            heap_free(address);
-//            heap_set_fences(chunk_to_reallocate);
-//            return data_address;
-//        }
-//
-//        memory_chunk = memory_chunk->next;
-//    }
-
     // Otherwise allocate new memory.
     void *new_address = heap_malloc(count);
     if (new_address == NULL)
@@ -350,11 +331,6 @@ void heap_free(void *address)
         }
 
         memory_chunk = prev;
-    }
-
-    if (prev && prev->free == USED)
-    {
-
     }
 
     // Merge next freed chunk.
