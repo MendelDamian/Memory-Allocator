@@ -9,7 +9,6 @@ MEMORY_MANAGER memory_manager;
 #define PAGE_SIZE 4096
 #define FENCE 0x23  // '#'
 #define FENCES 16
-#define MAGIC 0xdeadbeef
 #define SBRK_FAIL ((void *)-1)
 #define CHUNK_SPACE (sizeof(MEMORY_CHUNK) + 2 * FENCES)
 
@@ -28,7 +27,16 @@ void* heap_chunk_to_data_address(MEMORY_CHUNK *chunk)
 // Get MEMORY_CHUNK using pointer_valid.
 MEMORY_CHUNK* heap_chunk_from_data_address(void *addr)
 {
-    MEMORY_CHUNK *chunk = (MEMORY_CHUNK *) ((char *) addr - sizeof(MEMORY_CHUNK) - FENCES);
+    MEMORY_CHUNK *chunk;
+    size_t aligned_offset = (size_t)addr - sizeof(size_t);
+    if (*(char *)((size_t)addr - sizeof(size_t)) == '#')
+    {
+        chunk = (MEMORY_CHUNK *)((char *)addr - sizeof(MEMORY_CHUNK) - FENCES);
+    }
+    else
+    {
+        chunk = (MEMORY_CHUNK *)((size_t)addr - aligned_offset);
+    }
     return chunk;
 }
 
@@ -126,7 +134,7 @@ void* heap_malloc(size_t size)
         {
             memory_chunk->size = size;
             memory_chunk->free = USED;
-            memory_chunk->magic = MAGIC;
+            memory_chunk->aligned_offset = 0;
             heap_set_fences(memory_chunk);
             return heap_chunk_to_data_address(memory_chunk);
         }
@@ -142,7 +150,7 @@ void* heap_malloc(size_t size)
                 MEMORY_CHUNK *new_chunk = heap_get_next_chunk(memory_chunk);
                 new_chunk->size = size;
                 new_chunk->free = USED;
-                new_chunk->magic = MAGIC;
+                new_chunk->aligned_offset = 0;
 
                 new_chunk->next = memory_chunk->next;
                 new_chunk->prev = memory_chunk;
@@ -176,7 +184,7 @@ void* heap_malloc(size_t size)
             next->next = NULL;
             next->size = size;
             next->free = USED;
-            next->magic = MAGIC;
+            next->aligned_offset = 0;
             heap_set_fences(next);
             return heap_chunk_to_data_address(next);
         }
@@ -203,7 +211,7 @@ void* heap_malloc(size_t size)
     memory_chunk->prev = NULL;
     memory_chunk->next = NULL;
     memory_manager.first_memory_chunk = memory_chunk;
-    memory_chunk->magic = MAGIC;
+    memory_chunk->aligned_offset = 0;
     heap_set_fences(memory_chunk);
     return heap_chunk_to_data_address(memory_chunk);
 }
@@ -419,7 +427,7 @@ enum pointer_type_t get_pointer_type(const void *ptr)
         {
             return pointer_inside_fences;
         }
-        if (ptr == data_block_start)
+        if (ptr == (char *)data_block_start + memory_chunk->aligned_offset)
         {
             return pointer_valid;
         }
@@ -466,11 +474,6 @@ int heap_validate(void)
             return 3;
         }
 
-        if (memory_chunk->magic != MAGIC)
-        {
-            return 3;
-        }
-
         if (memory_chunk->prev && memory_chunk->prev->next != memory_chunk)
         {
             return 3;
@@ -498,13 +501,30 @@ int heap_validate(void)
 
         memory_chunk = memory_chunk->next;
     }
-    return 0;
+     return 0;
 }
 
 void* heap_malloc_aligned(size_t size)
 {
-    (void)size;
-    return NULL;
+    if (size == 0)
+    {
+        return NULL;
+    }
+
+    void *malloc_addr = heap_malloc(size + PAGE_SIZE + sizeof(size_t));
+    if (malloc_addr == NULL)
+    {
+        return NULL;
+    }
+
+    size_t addr = (size_t)malloc_addr + PAGE_SIZE + sizeof(size_t);
+
+    void *aligned_addr = (void *)(addr - (addr % PAGE_SIZE));
+    *((size_t *)aligned_addr - 1) = (size_t)malloc_addr;
+
+    MEMORY_CHUNK *memory_chunk = heap_chunk_from_data_address(malloc_addr);
+    memory_chunk->aligned_offset = (char *)aligned_addr - (char *)malloc_addr;
+    return aligned_addr;
 }
 
 void* heap_calloc_aligned(size_t number, size_t size)
@@ -537,7 +557,7 @@ void heap_print_chunks(void)
         printf("\tFree: %s\n", memory_chunk->free == USED ? "USED" : "FREED");
         printf("\tPrev: %p\n", (void *)memory_chunk->prev);
         printf("\tNext: %p\n", (void *)memory_chunk->next);
-        printf("\tMagic: %x\n", memory_chunk->magic);
+        printf("\tAligned offset: %x\n", memory_chunk->aligned_offset);
 
         i++;
         memory_chunk = memory_chunk->next;

@@ -33,7 +33,7 @@ typedef struct memory_chunk_t
     struct memory_chunk_t *next;
     size_t size;
     int free;
-    unsigned int magic;
+    unsigned int aligned_offset;  // Amount of bytes to aligned address.
 } MEMORY_CHUNK;
 
 int heap_setup(void);
