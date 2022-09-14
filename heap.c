@@ -255,100 +255,66 @@ void* heap_realloc(void *address, size_t count)
         return address;
     }
 
-    // Check if this chunk can be expanded.
-    size_t occupied_size;
-    if (chunk_to_reallocate->next)
-    {
-        occupied_size = (char *)chunk_to_reallocate->next - (char *)chunk_to_reallocate;
-    }
-    else
-    {
-        occupied_size = heap_chunk_size(chunk_to_reallocate);
-        occupied_size -= sizeof(MEMORY_CHUNK);
-    }
-    size_t needed_space = heap_calc_size(count);
-    size_t remaining_space = heap_remaining_space(chunk_to_reallocate);
+    size_t needed_space = heap_calc_size(count), remaining_space;
 
-    if (needed_space <= occupied_size)
+    // Expand if last chunk.
+    if (chunk_to_reallocate->next == NULL)
+    {
+        remaining_space = heap_offset(chunk_to_reallocate);
+        if (needed_space > remaining_space)
+        {
+            size_t to_allocate = needed_space - remaining_space;
+            to_allocate = ALIGN_PAGE(to_allocate);
+            if (custom_sbrk((intptr_t)to_allocate) == SBRK_FAIL)
+            {
+                return NULL;
+            }
+            memory_manager.memory_size += to_allocate;
+        }
+
+        chunk_to_reallocate->size = count;
+        heap_set_fences(chunk_to_reallocate);
+        return address;
+    }
+
+    // Expand if there is enough space behind.
+    remaining_space = (char *)chunk_to_reallocate->next - (char *)chunk_to_reallocate;
+    if (needed_space <= remaining_space)
     {
         chunk_to_reallocate->size = count;
         heap_set_fences(chunk_to_reallocate);
         return address;
     }
 
-    if (chunk_to_reallocate->next == NULL && needed_space > remaining_space)
-    {
-        intptr_t to_allocate = ALIGN_PAGE(needed_space - remaining_space);
-        void *result = custom_sbrk(to_allocate);
-        if (result == SBRK_FAIL)
-        {
-            return NULL;
-        }
+//    // Loop through freed chunks.
+//    MEMORY_CHUNK *memory_chunk = chunk_to_reallocate;
+//    while (memory_chunk)
+//    {
+//        if (memory_chunk->free == FREED && heap_chunk_size(memory_chunk) >= needed_space)
+//        {
+//            memory_chunk->size = count;
+//            memory_chunk->free = USED;
+//
+//            void *data_address = heap_chunk_to_data_address(memory_chunk);
+//            memcpy(data_address, address, chunk_to_reallocate->size);
+//            heap_free(address);
+//            heap_set_fences(chunk_to_reallocate);
+//            return data_address;
+//        }
+//
+//        memory_chunk = memory_chunk->next;
+//    }
 
-        memory_manager.memory_size += (size_t)to_allocate;
-        chunk_to_reallocate->size = count;
-        heap_set_fences(chunk_to_reallocate);
-        return address;
+    // Otherwise allocate new memory.
+    void *new_address = heap_malloc(count);
+    if (new_address == NULL)
+    {
+        return NULL;
     }
 
-    MEMORY_CHUNK *memory_chunk = chunk_to_reallocate;
-    while (memory_chunk)
-    {
-        // Handle freed chunk.
-        if (memory_chunk->free == FREED && memory_chunk->size >= (count + FENCES * 2))
-        {
-            memory_chunk->size = count;
-            memory_chunk->free = USED;
-            heap_set_fences(memory_chunk);
-
-            void *data = heap_chunk_to_data_address(memory_chunk);
-            memcpy(data, heap_chunk_to_data_address(chunk_to_reallocate), chunk_to_reallocate->size);
-            heap_free(chunk_to_reallocate);
-
-            return data;
-        }
-
-        if (memory_chunk->next)
-        {
-            occupied_size = (char *)memory_chunk->next - (char *)memory_chunk;
-            occupied_size -= heap_chunk_size(memory_chunk);  // Free space between chunks.
-
-            if (occupied_size >= needed_space)
-            {
-                MEMORY_CHUNK *new_chunk = heap_get_next_chunk(memory_chunk);
-                new_chunk->size = count;
-                new_chunk->free = USED;
-                new_chunk->magic = MAGIC;
-
-                new_chunk->next = memory_chunk->next;
-                new_chunk->prev = memory_chunk;
-                memory_chunk->next = new_chunk;
-                new_chunk->next->prev = new_chunk;
-
-                heap_set_fences(new_chunk);
-                memcpy(heap_chunk_to_data_address(new_chunk),
-                       heap_chunk_to_data_address(chunk_to_reallocate),
-                       chunk_to_reallocate->size);
-                heap_free(chunk_to_reallocate);
-                return heap_chunk_to_data_address(new_chunk);
-            }
-        }
-        else
-        {
-            void *ptr = heap_malloc(count);
-            if (ptr)
-            {
-                void *data = heap_chunk_to_data_address(chunk_to_reallocate);
-                memcpy(ptr, data, chunk_to_reallocate->size);
-                heap_free(address);
-                return ptr;
-            }
-        }
-
-        memory_chunk = memory_chunk->next;
-    }
-
-    return NULL;
+    memcpy(new_address, address, chunk_to_reallocate->size);
+    heap_free(address);
+    return new_address;
 }
 
 void heap_free(void *address)
