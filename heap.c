@@ -27,16 +27,14 @@ void* heap_chunk_to_data_address(MEMORY_CHUNK *chunk)
 // Get MEMORY_CHUNK using pointer_valid.
 MEMORY_CHUNK* heap_chunk_from_data_address(void *addr)
 {
-    MEMORY_CHUNK *chunk;
-    size_t aligned_offset = (size_t)addr - sizeof(size_t);
-    if (*(char *)((size_t)addr - sizeof(size_t)) == '#')
+    MEMORY_CHUNK *chunk = addr;
+    if (((intptr_t)addr & (intptr_t)(PAGE_SIZE - 1)) == 0)
     {
-        chunk = (MEMORY_CHUNK *)((char *)addr - sizeof(MEMORY_CHUNK) - FENCES);
+        size_t offset = *((size_t *)addr - 1);
+        chunk = (MEMORY_CHUNK *)((size_t)addr - offset);
     }
-    else
-    {
-        chunk = (MEMORY_CHUNK *)((size_t)addr - aligned_offset);
-    }
+
+    chunk = (MEMORY_CHUNK *)((char *)chunk - sizeof(MEMORY_CHUNK) - FENCES);
     return chunk;
 }
 
@@ -142,7 +140,7 @@ void* heap_malloc(size_t size)
         if (memory_chunk->next)
         {
             size_t occupied_size = (char *)memory_chunk->next - (char *)memory_chunk;
-            occupied_size -= heap_chunk_size(memory_chunk);  // Free space between chunks.
+            occupied_size -= heap_chunk_size(memory_chunk);  // Get free space between chunks.
             size_t needed_space = heap_calc_size(size);
 
             if (occupied_size >= needed_space)
@@ -315,6 +313,7 @@ void heap_free(void *address)
 
     // Set the memory chunk to be freed.
     MEMORY_CHUNK *memory_chunk = heap_chunk_from_data_address(address);
+    memory_chunk->free = FREED;
     if (memory_chunk->next && memory_chunk->next->free == USED
         && memory_chunk->prev && memory_chunk->prev->free == USED)
     {
@@ -323,7 +322,6 @@ void heap_free(void *address)
         return;
     }
 
-    memory_chunk->free = FREED;
     memory_chunk->size = heap_chunk_size(memory_chunk) - sizeof(MEMORY_CHUNK);  // Without control block.
 
     MEMORY_CHUNK *prev = memory_chunk->prev;
@@ -427,7 +425,7 @@ enum pointer_type_t get_pointer_type(const void *ptr)
         {
             return pointer_inside_fences;
         }
-        if (ptr == (char *)data_block_start + memory_chunk->aligned_offset)
+        if (ptr == data_block_start || ptr == (char *)data_block_start + memory_chunk->aligned_offset)
         {
             return pointer_valid;
         }
@@ -511,7 +509,8 @@ void* heap_malloc_aligned(size_t size)
         return NULL;
     }
 
-    void *malloc_addr = heap_malloc(size + PAGE_SIZE + sizeof(size_t));
+    size_t to_allocate = size + sizeof(size_t) + PAGE_SIZE - sizeof(MEMORY_CHUNK) - FENCES;
+    void *malloc_addr = heap_malloc(to_allocate);
     if (malloc_addr == NULL)
     {
         return NULL;
@@ -520,7 +519,8 @@ void* heap_malloc_aligned(size_t size)
     size_t addr = (size_t)malloc_addr + PAGE_SIZE + sizeof(size_t);
 
     void *aligned_addr = (void *)(addr - (addr % PAGE_SIZE));
-    *((size_t *)aligned_addr - 1) = (size_t)malloc_addr;
+    size_t offset = (size_t)aligned_addr - (size_t)malloc_addr;
+    *((size_t *)aligned_addr - 1) = offset;
 
     MEMORY_CHUNK *memory_chunk = heap_chunk_from_data_address(malloc_addr);
     memory_chunk->aligned_offset = (char *)aligned_addr - (char *)malloc_addr;
@@ -599,17 +599,19 @@ void heap_print(void)
                 return;
         }
 
-        adr = (char *)adr + 1;
-        if (counter == 127)
+        if (counter && counter % 128 == 0)
         {
-            counter = 0;
             putchar('\n');
             putchar(' ');
         }
-        else
+        if (counter && counter % PAGE_SIZE == 0)
         {
-            counter++;
+            printf("--- END OF PAGE --- %p\n", adr);
+            putchar(' ');
         }
+
+        adr = (char *)adr + 1;
+        counter++;
     }
 
     puts("\r]\n");
