@@ -502,6 +502,41 @@ int heap_validate(void)
      return 0;
 }
 
+void justify_aligned_control_blocks(void)
+{
+    if (heap_validate())
+    {
+        return;
+    }
+
+    MEMORY_CHUNK *memory_chunk = memory_manager.first_memory_chunk;
+    while (memory_chunk)
+    {
+        unsigned int minimum_offset = 56;  // Control block + first fences + sizeof(size_t)
+        if (memory_chunk->aligned_offset > minimum_offset && memory_chunk->prev)
+        {
+            void *new_addr = (void *)(ALIGN_PAGE((size_t)memory_chunk) - 56);
+
+            size_t new_size = (size_t)heap_chunk_to_data_address(memory_chunk) + memory_chunk->size - ALIGN_PAGE((size_t)new_addr) + 8;
+            MEMORY_CHUNK justified_chunk = {
+                    .next = memory_chunk->next,
+                    .prev = memory_chunk->prev,
+                    .free = USED,
+                    .size = new_size,
+                    .aligned_offset = 8
+            };
+            memcpy(new_addr, &justified_chunk, sizeof(MEMORY_CHUNK));
+            memory_chunk->prev->next = new_addr;
+            if (memory_chunk->next)
+            {
+                memory_chunk->next->prev = new_addr;
+            }
+            heap_set_fences(new_addr);
+        }
+        memory_chunk = memory_chunk->next;
+    }
+}
+
 void* heap_malloc_aligned(size_t size)
 {
     if (size == 0)
@@ -524,6 +559,8 @@ void* heap_malloc_aligned(size_t size)
 
     MEMORY_CHUNK *memory_chunk = heap_chunk_from_data_address(malloc_addr);
     memory_chunk->aligned_offset = (char *)aligned_addr - (char *)malloc_addr;
+
+    justify_aligned_control_blocks();
     return aligned_addr;
 }
 
