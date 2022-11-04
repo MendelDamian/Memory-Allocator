@@ -33,7 +33,7 @@ typedef struct memory_chunk_t
     struct memory_chunk_t *next;
     size_t size;
     int free;
-    unsigned int aligned_offset;  // Amount of bytes to aligned address.
+    unsigned int checksum;
 } MEMORY_CHUNK;
 
 int heap_setup(void);
@@ -49,9 +49,9 @@ enum pointer_type_t get_pointer_type(const void* ptr);
 
 int heap_validate(void);
 
-void* heap_malloc_aligned(size_t size);
-void* heap_calloc_aligned(size_t number, size_t size);
-void* heap_realloc_aligned(void *address, size_t size);
+//void* heap_malloc_aligned(size_t size);
+//void* heap_calloc_aligned(size_t number, size_t size);
+//void* heap_realloc_aligned(void *address, size_t size);
 
 void heap_print_chunks(void);
 void heap_print(void);
