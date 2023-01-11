@@ -5,9 +5,6 @@ A custom memory manager implementation project developed for the "Operating Syst
 
 - [@MendelDamian](https://www.github.com/MendelDamian)
 
-## Tech stack
-This project is written in C programming language, that uses standard C libraries. It also using some non-standard library called "unistd.h" which are related to memory allocation and system calls.
-
 ## Features
 - Detects buffer overflows and heap corruptions using guard fences.
 - Keeps track of the largest used block size, which can be queried using `heap_get_largest_used_block_size`.
