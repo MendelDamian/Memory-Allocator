@@ -70,5 +70,5 @@ This project provides several functions for memory management, such as:
 
 **NOTE** `heap_setup` should be called before any other memory allocation functions are used.
 
-# Note
+# :warning:NOTE:warning:
 Please keep in mind that this project, despite passing automated tests, is bound to have some bugs and isn't perfect, so don't use it in production. It is for educational purposes only.
